@@ -319,9 +319,9 @@ def plot_hanle_broad_and_narrow(
     if grid:
         broad_ax.grid(True, linestyle=":", alpha=0.4)
     if any(broad_ax.get_legend_handles_labels()[0]):
-        # 1列6件まで
+        # 1列6件まで、凡例は左上に配置
         legend_cols = math.ceil(num_broad / 6) if num_broad > 0 else 1
-        broad_ax.legend(frameon=False, fontsize=13, ncol=legend_cols)
+        broad_ax.legend(frameon=False, fontsize=13, ncol=legend_cols, loc="upper left")
     # narrow 側
     num_narrow = max(
         len(narrow_exp_data_series),
@@ -375,7 +375,7 @@ def plot_hanle_broad_and_narrow(
         narrow_ax.grid(True, linestyle=":", alpha=0.4)
     if any(narrow_ax.get_legend_handles_labels()[0]):
         legend_cols = math.ceil(num_narrow / 6) if num_narrow > 0 else 1
-        narrow_ax.legend(frameon=False, fontsize=13, ncol=legend_cols)
+        narrow_ax.legend(frameon=False, fontsize=13, ncol=legend_cols, loc="upper left")
     fig.tight_layout()
     return fig, broad_ax, narrow_ax
 
@@ -516,4 +516,41 @@ def plot_hanle_by_index(
 
     fig.tight_layout()
     return fig, ax
+
+
+def calc_hanle_n_only_rms_from_files(
+    file_paths: Sequence[str],
+) -> List[float]:
+    """
+    read_hanle_n_only で読み込んだ実験データ/フィッティングデータから
+    RMS を計算して返す。
+
+    Parameters:
+    - file_paths: n_only のファイルパスのリスト
+
+    Returns:
+    - RMS のリスト（ファイル順）
+    """
+    rms_list: List[float] = []
+    for path in file_paths:
+        exp_data, fitting_data = read_hanle_n_only(path)
+
+        # [magnetic_field_list, voltage_list]
+        exp_v = exp_data[1]
+        fit_v = fitting_data[1]
+
+        if len(exp_v) == 0 or len(fit_v) == 0:
+            rms_list.append(float("nan"))
+            continue
+
+        # 長さが違う場合は共通部分で計算
+        n = min(len(exp_v), len(fit_v))
+        diff_sq_sum = 0.0
+        for i in range(n):
+            diff = exp_v[i] - fit_v[i]
+            diff_sq_sum += diff * diff
+        rms = math.sqrt(diff_sq_sum / n) if n > 0 else float("nan")
+        rms_list.append(rms)
+
+    return rms_list
 
