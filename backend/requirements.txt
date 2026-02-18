@@ -1,0 +1,9 @@
+fastapi==0.109.2
+uvicorn==0.27.1
+python-multipart==0.0.9
+plotly==5.18.0
+pandas==2.2.0
+pyyaml==6.0.1
+pydantic==2.6.1
+matplotlib==3.8.2
+
