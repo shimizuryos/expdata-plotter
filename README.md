@@ -47,8 +47,34 @@ The `start_app.sh` script will automatically:
 **Navigation**:
 The application Home Page provides access to:
 - **PS-RA Plot**: Visualizes point data (RA, Ps, RMS) from `data/ps_ra_data.yaml`.
+- **Log RA vs V Plot**: Visualizes Log RA vs Voltage traces. configured in `data/iv_plot_data.yaml`.
+    - Supports grouping of IV curves (e.g. `low_ps`, `high_ps`) with custom colors.
+    - Calculates RA product (Resistance * Area) automatically.
 - **Cascade IV**: Visualizes IV curves (requires data).
 - **Hanle**: Visualizes Hanle effect data (requires data).
+
+### Configuration (Log RA vs V)
+
+To add a new Log RA vs V plot, create or edit `data/iv_plot_data.yaml`:
+
+```yaml
+my_plot_key:
+  plot_type: log_ra_v
+  group_name_1:
+    color: "red"
+    data:
+      sample_label_1:
+        file_path: '/absolute/path/to/iv_data.txt'
+        area: 250
+      sample_label_2:
+        file_path: '/absolute/path/to/iv_data_2.txt'
+        area: 250
+  group_name_2:
+    color: "blue"
+    data:
+       ...
+```
+
 - **Upload**: Utility to upload files to `backend/data/raw` (if needed).
 
 **Troubleshooting**:

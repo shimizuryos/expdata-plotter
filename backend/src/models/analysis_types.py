@@ -20,3 +20,11 @@ class RAPsSeries:
     points: List[RAPsPoint]
     label: str
     color: str
+
+@dataclass
+class LogRAVSeries:
+    vd_mV: List[float]
+    ra_ohm_um2: List[float]
+    label: str
+    color: str
+    group_label: str
