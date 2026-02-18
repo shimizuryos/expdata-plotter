@@ -15,11 +15,11 @@ export default function Home() {
                 </Link>
 
                 <Link
-                    href="/plots/ps-ra"
+                    href="/plots/systematic"
                     className="p-6 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow border border-gray-200"
                 >
-                    <h2 className="text-2xl font-semibold mb-2">Ps-RA Plot</h2>
-                    <p className="text-gray-600">Interactive Ps vs RA visualization.</p>
+                    <h2 className="text-2xl font-semibold mb-2">Systematic Plots</h2>
+                    <p className="text-gray-600">Ps-RA correlation and Log-RA-V plots.</p>
                 </Link>
 
                 <Link

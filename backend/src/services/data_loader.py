@@ -280,7 +280,76 @@ def read_hanle_n_only(
     fitting_data = series[0]
     return exp_data, fitting_data
 
-from ..models.analysis_types import ParsedIVSeries, RAPsSeries, RAPsPoint
+    return exp_data, fitting_data
+
+from ..models.analysis_types import ParsedIVSeries, RAPsSeries, RAPsPoint, LogRAVSeries
+
+def load_log_ra_v_data(yaml_path: str, plot_key: str) -> List[LogRAVSeries]:
+    """
+    Load Log-RA-V data from YAML for a specific plot key.
+    Calculates RA = R * Area for each series.
+    Returns list of LogRAVSeries.
+    """
+    series_list: List[LogRAVSeries] = []
+    
+    try:
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            payload = yaml.safe_load(f)
+            
+        plot_config = payload.get(plot_key, {})
+        if not plot_config:
+            return []
+            
+        # Iterate over groups (keys that are not 'plot_type' etc.)
+        for group_key, group_data in plot_config.items():
+            if group_key in ["plot_type"]:
+                continue
+                
+            if not isinstance(group_data, dict):
+                continue
+                
+            color = group_data.get("color", "black")
+            group_items = group_data.get("data", {})
+            
+            for item_key, item_data in group_items.items():
+                file_path = item_data.get("file_path")
+                area_um2 = item_data.get("area", 1.0)
+                
+                if not file_path:
+                    continue
+                    
+                # Load IV data
+                # We reuse load_iv_data or parse_iv_csv depending on file extension or format
+                # The example path provided doesn't have an extension, implying simple format maybe?
+                # Let's try load_iv_data first (simple space separated)
+                iv_series = load_iv_data(file_path)
+                
+                # If load_iv_data failed (empty lists), try csv? 
+                # Or maybe check warnings. load_iv_data returns warnings.
+                if not iv_series.r_ohm:
+                     # Fallback or error handling? 
+                     # For now, if no data, skip
+                     continue
+
+                # Calculate RA
+                # ra_ohm_um2 = r_ohm * area_um2
+                ra_list = [r * area_um2 for r in iv_series.r_ohm]
+                
+                series_list.append(LogRAVSeries(
+                    vd_mV=iv_series.vd_mV,
+                    ra_ohm_um2=ra_list,
+                    label=item_key,
+                    color=color,
+                    group_label=group_key
+                ))
+
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"Error loading yaml or processing data: {e}")
+        
+    return series_list
+
 
 # ... (omitted)
 
