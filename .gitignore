@@ -205,3 +205,14 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+/data
+/outputs
+
+# Frontend / Next.js
+node_modules/
+.next/
+out/
+build/
+.DS_Store
+*.log
