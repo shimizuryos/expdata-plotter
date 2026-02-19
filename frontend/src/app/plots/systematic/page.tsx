@@ -24,6 +24,14 @@ export default function SystematicPlotsPage() {
                     <h2 className="text-2xl font-semibold mb-2">Log RA vs V Plot</h2>
                     <p className="text-gray-600">Visualize Log(RA) vs Voltage curves for grouped experimental data.</p>
                 </Link>
+
+                <Link
+                    href="/plots/systematic/heatmap"
+                    className="p-6 bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow border border-gray-200"
+                >
+                    <h2 className="text-2xl font-semibold mb-2">Heatmap</h2>
+                    <p className="text-gray-600">Visualize Ps, RA, RMS values on an (x, y) coordinate grid.</p>
+                </Link>
             </div>
 
             <Link href="/" className="mt-12 px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">

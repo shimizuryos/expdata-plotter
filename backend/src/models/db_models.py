@@ -29,6 +29,7 @@ class Sample:
     structures: List[LayerStructure]
     device_groups: List[DeviceGroup]
     note: str = ""
+    r_parasitic: Optional[float] = None  # R_para (ohm), shared across all devices
 
 @dataclass
 class Measurement:

@@ -329,3 +329,321 @@ def delete_measurement(measurement_id: str):
     
     measurement_repo.delete(measurement_id)
     return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# IV Data Loading & Plotting
+# ---------------------------------------------------------------------------
+from ..services.data_loader import load_iv_data
+import plotly.graph_objects as go
+import json as _json
+import numpy as np
+
+class IVLoadRequest(BaseModel):
+    file_ref: str
+    area_um2: float
+    r_p: float = 0.0  # Resistance in Ohms to subtract (V_corr = V - I * R)
+    label: str = ""
+
+class IVLoadMultiRequest(BaseModel):
+    entries: List[IVLoadRequest]
+
+def _build_iv_plots(entries: List[dict]):
+    """
+    Build IV and logR-V Plotly JSON from parsed IV entries.
+    entries: list of {label, file_ref, area_um2, r_p, parsed: ParsedIVSeries}
+    Returns {iv_plot, log_r_v_plot}
+    """
+    iv_fig = go.Figure()
+    rv_fig = go.Figure()
+
+    for ent in entries:
+        parsed = ent["parsed"]
+        label = ent.get("label", "")
+        # area = ent["area_um2"] # Used for RA calculation if needed
+        r_p = ent.get("r_p", 0.0)
+
+        if not parsed.id_mA:
+            continue
+
+        id_arr = np.array(parsed.id_mA)
+        vd_arr = np.array(parsed.vd_mV)
+        r_arr = np.array(parsed.r_ohm)
+
+        # Apply Series R correction: V_corrected = V - I * R_series
+        # I is in mA, R_series in Ohm, V in mV => I(A) * R(Ohm) * 1000 = mV
+        if r_p != 0:
+            vd_arr = vd_arr - (id_arr / 1000.0) * r_p * 1000.0
+            # Recalculate R from corrected V
+            with np.errstate(divide='ignore', invalid='ignore'):
+                r_arr = np.where(id_arr != 0, vd_arr / id_arr, 0)
+
+        # IV plot
+        iv_fig.add_trace(go.Scatter(
+            x=vd_arr.tolist(), y=id_arr.tolist(),
+            mode='lines+markers', name=label,
+            marker=dict(size=3),
+            hovertemplate=f"<b>{label}</b><br>V: %{{x:.2f}} mV<br>I: %{{y:.4f}} mA<extra></extra>"
+        ))
+
+        # Filter near-zero voltage for log plot
+        mask = np.abs(vd_arr) > 5
+        r_filtered = np.abs(r_arr[mask])
+        v_filtered = vd_arr[mask]
+
+        rv_fig.add_trace(go.Scatter(
+            x=v_filtered.tolist(), y=r_filtered.tolist(),
+            mode='lines+markers', name=label,
+            marker=dict(size=3),
+            hovertemplate=f"<b>{label}</b><br>V: %{{x:.2f}} mV<br>R: %{{y:.4g}} Ω<extra></extra>"
+        ))
+
+    iv_fig.update_layout(
+        title="IV Characteristics", xaxis_title="Voltage (mV)", yaxis_title="Current (mA)",
+        plot_bgcolor='white', hovermode='closest',
+        xaxis=dict(showgrid=True, gridcolor='LightGray'),
+        yaxis=dict(showgrid=True, gridcolor='LightGray'),
+    )
+
+    rv_fig.update_layout(
+        title="Log R vs V", xaxis_title="Voltage (mV)", yaxis_title="R (Ω)",
+        yaxis_type="log",
+        plot_bgcolor='white', hovermode='closest',
+        xaxis=dict(showgrid=True, gridcolor='LightGray'),
+        yaxis=dict(showgrid=True, gridcolor='LightGray'),
+    )
+
+    return {
+        "iv_plot": _json.loads(iv_fig.to_json()),
+        "log_r_v_plot": _json.loads(rv_fig.to_json()),
+    }
+
+
+@router.post("/iv/load")
+def iv_load(req: IVLoadRequest):
+    """Load a single IV file and return Plotly JSON for IV + log R-V."""
+    parsed = load_iv_data(req.file_ref)
+    if not parsed.id_mA:
+        return {"iv_plot": None, "log_r_v_plot": None, "warnings": ["No data found"], "raw": []}
+    
+    entry = {
+        "parsed": parsed,
+        "label": req.label or req.file_ref.split('/')[-1],
+        "area_um2": req.area_um2,
+        "r_p": req.r_p,
+    }
+    result = _build_iv_plots([entry])
+    result["warnings"] = parsed.warnings
+    result["raw"] = parsed.raw_data_lines
+    return result
+
+
+@router.post("/iv/load-multi")
+def iv_load_multi(req: IVLoadMultiRequest):
+    """Load multiple IV files and return overlaid Plotly JSON."""
+    entries = []
+    all_warnings = []
+    for e in req.entries:
+        parsed = load_iv_data(e.file_ref)
+        all_warnings.extend(parsed.warnings)
+        entries.append({
+            "parsed": parsed,
+            "label": e.label or e.file_ref.split('/')[-1],
+            "area_um2": e.area_um2,
+            "r_p": e.r_p,
+        })
+
+    result = _build_iv_plots(entries)
+    result["warnings"] = all_warnings
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Parasitic Resistance Fitting
+# ---------------------------------------------------------------------------
+class FitParasiticRequest(BaseModel):
+    entries: List[IVLoadRequest]
+    initial_r_para: float = 0.0 # initial_r_para not strictly needed for analytic solution but kept for compatibility/extensions
+    mode: str = "full"  # "full" or "step"
+
+@router.post("/iv/fit-parasitic")
+def fit_parasitic(req: FitParasiticRequest):
+    """
+    Calculate parasitic resistance R_para such that the peaks of the RA curves
+    (derived from corrected R) of the two smallest area devices match.
+    Formula: R_para = (R_max1 * A1 - R_max2 * A2) / (A1 - A2)
+    """
+    # Sort entries by area and pick smallest two
+    sorted_entries = sorted(req.entries, key=lambda e: e.area_um2)
+    if len(sorted_entries) < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 devices for fitting")
+
+    small_two = sorted_entries[:2]
+    e1, e2 = small_two[0], small_two[1]
+    A1, A2 = e1.area_um2, e2.area_um2
+
+    # Parse data
+    p1 = load_iv_data(e1.file_ref)
+    p2 = load_iv_data(e2.file_ref)
+    if not p1.id_mA or not p2.id_mA:
+         raise HTTPException(status_code=400, detail="Data missing in one of the smallest devices")
+
+    # Get Max Resistance (R_max) from raw data (approximate peak of R-V curve)
+    # R_ohm is already in parsed data
+    # Filter for reasonable voltage range to avoid noise at V=0?
+    # Usually peak is at V=0.
+    def get_max_r(p):
+        r_arr = np.array(p.r_ohm)
+        # Filter NaNs or Infs
+        r_arr = r_arr[np.isfinite(r_arr)]
+        if len(r_arr) == 0: return 0.0
+        return np.max(r_arr)
+
+    R_max1 = get_max_r(p1)
+    R_max2 = get_max_r(p2)
+
+    # Analytic solution
+    # r_para = (R_max1 * A1 - R_max2 * A2) / (A1 - A2)
+    if abs(A1 - A2) < 1e-6:
+         # Same area, cannot determine R_para by this method
+         optimal_r_para = 0.0
+    else:
+        optimal_r_para = (R_max1 * A1 - R_max2 * A2) / (A1 - A2)
+
+    # Sanity check: R_para should not exceed R_max1 (otherwise R_corrected < 0)
+    # But strictly speaking it could if the model is perfect.
+    # However, usually R_para is positive.
+    if optimal_r_para < 0:
+        optimal_r_para = 0.0 # Clamp to 0 if calculation yields negative
+
+    # Build corrected plots for ALL entries
+    all_entries = []
+    for e in req.entries:
+        p = load_iv_data(e.file_ref)
+        all_entries.append({
+            "parsed": p,
+            "label": e.label or e.file_ref.split('/')[-1],
+            "area_um2": e.area_um2,
+            "r_p": optimal_r_para,
+        })
+
+    plots = _build_iv_plots(all_entries)
+
+    return {
+        "r_para": optimal_r_para,
+        "plots": plots,
+    }
+
+
+@router.put("/samples/{sample_id}/r-parasitic")
+def update_r_parasitic(sample_id: str, body: dict = Body(...)):
+    """Save r_parasitic to the sample."""
+    r_para = body.get("r_parasitic")
+    if r_para is None:
+        raise HTTPException(status_code=400, detail="r_parasitic is required")
+    try:
+        sample_repo.update_r_parasitic(sample_id, float(r_para))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Heatmap Data
+# ---------------------------------------------------------------------------
+@router.get("/samples/{sample_id}/heatmap-data")
+def get_heatmap_data(sample_id: str):
+    """
+    Collect Hanle-derived values (Ps, RA, RMS) for each device,
+    keyed by (x, y) coordinate.
+    """
+    sample = sample_repo.get_by_id(sample_id)
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+
+    devices_data = []
+    # Compute x/y ranges
+    coords = [d["coord"] for group in sample.device_groups for d in group.devices] # This line was incorrect, it should be group.coord
+    
+    x_range = [None, None]
+    y_range = [None, None]
+
+    for group in sample.device_groups:
+        cx, cy = group.coord
+        if x_range[0] is None or cx < x_range[0]: x_range[0] = cx
+        if x_range[1] is None or cx > x_range[1]: x_range[1] = cx
+        if y_range[0] is None or cy < y_range[0]: y_range[0] = cy
+        if y_range[1] is None or cy > y_range[1]: y_range[1] = cy
+
+        for device in group.devices:
+            entry = {
+                "coord": list(group.coord),
+                "device_id": device.device_id,
+                "area_um2": device.area_um2,
+                "hanle": None,
+            }
+
+            # Try to get default Hanle measurement
+            hanle_id = device.default_measurements.get("Hanle")
+            if hanle_id:
+                meas = measurement_repo.get_by_id(hanle_id)
+                if meas and meas.derived:
+                    entry["hanle"] = meas.derived
+
+            devices_data.append(entry)
+
+    # The original code had a bug in calculating x_range/y_range if devices_data was empty.
+    # The new logic for x_range/y_range calculation is more robust.
+    # If no device groups, x_range/y_range will remain [None, None].
+    # The instruction provided a different heatmap-data logic, which I will incorporate.
+    # The instruction's heatmap-data logic is more detailed and includes json.loads for derived data.
+
+    # Re-implementing get_heatmap_data based on the provided instruction's snippet
+    devices_data = []
+    x_range = [None, None]
+    y_range = [None, None]
+
+    for group in sample.device_groups:
+        cx, cy = group.coord
+        if x_range[0] is None or cx < x_range[0]: x_range[0] = cx
+        if x_range[1] is None or cx > x_range[1]: x_range[1] = cx
+        if y_range[0] is None or cy < y_range[0]: y_range[0] = cy
+        if y_range[1] is None or cy > y_range[1]: y_range[1] = cy
+
+        for device in group.devices:
+            # We want metrics from Analysis (Summary) if available, or just defaults
+            # Actually heatmap usually visualizes "Ps", "RA", "RMS" derived from Hanle
+            # Logic: Fetch 'default' Hanle measurement for the device, parse its results.
+            # For now, let's assume we look up the Measurement object.
+            
+            hanle_id = device.default_measurements.get("Hanle")
+            metrics = None
+            if hanle_id:
+                m = measurement_repo.get_by_id(hanle_id) # Changed from measurement_repo.get to get_by_id for consistency
+                if m and m.derived:
+                    try:
+                        # Ensure json is imported if not already
+                        import json
+                        derived = json.loads(m.derived) if isinstance(m.derived, str) else m.derived
+                        # derived structure: {"spin_signal": ..., "ra": ..., "rms": ...}
+                        metrics = {
+                            "ps_percent": derived.get("spin_signal"),
+                            "ra_ohm_um2": derived.get("ra"),
+                            "rms": derived.get("rms"),
+                        }
+                    except:
+                        pass
+            
+            devices_data.append({
+                "device_id": device.device_id,
+                "coord": group.coord,
+                "area_um2": device.area_um2,
+                "hanle": metrics
+            })
+
+    return {
+        "devices": devices_data,
+        "x_range": x_range,
+        "y_range": y_range,
+        "r_parasitic": sample.r_parasitic,
+    }
+

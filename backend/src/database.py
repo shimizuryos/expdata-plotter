@@ -71,6 +71,12 @@ def init_db(db_path: str = None):
     );
     """)
 
+    # --- Schema migrations (safe to re-run) ---
+    try:
+        cursor.execute("ALTER TABLE samples ADD COLUMN r_parasitic REAL DEFAULT NULL")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Indices for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_measurements_sample ON measurements(sample_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_measurements_device ON measurements(device_id);")

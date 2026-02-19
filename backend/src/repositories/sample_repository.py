@@ -26,10 +26,10 @@ class SampleRepository:
         with get_db_cursor(commit=True) as cursor:
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO samples (id, name, device_type, structures, device_groups, note)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO samples (id, name, device_type, structures, device_groups, note, r_parasitic)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (sample.id, sample.name, sample.device_type, structures_json, device_groups_json, sample.note)
+                (sample.id, sample.name, sample.device_type, structures_json, device_groups_json, sample.note, sample.r_parasitic)
             )
 
     def get_by_id(self, sample_id: str) -> Optional[Sample]:
@@ -136,6 +136,16 @@ class SampleRepository:
 
         self._save_sample(sample)
 
+    def update_r_parasitic(self, sample_id: str, r_parasitic: float) -> None:
+        """
+        Update the r_parasitic value for a sample.
+        """
+        sample = self.get_by_id(sample_id)
+        if not sample:
+            raise ValueError(f"Sample {sample_id} not found")
+        sample.r_parasitic = r_parasitic
+        self._save_sample(sample)
+
     def remove_device_from_group(self, sample_id: str, device_id: str) -> None:
         """
         Remove a device from its group in the sample.
@@ -189,11 +199,19 @@ class SampleRepository:
             )
             device_groups.append(dg)
 
+        # r_parasitic may not exist in older DBs
+        r_parasitic = None
+        try:
+            r_parasitic = row["r_parasitic"]
+        except (IndexError, KeyError):
+            pass
+
         return Sample(
             id=row["id"],
             name=row["name"],
             device_type=row["device_type"],
             structures=structures,
             device_groups=device_groups,
-            note=row["note"]
+            note=row["note"],
+            r_parasitic=r_parasitic
         )
