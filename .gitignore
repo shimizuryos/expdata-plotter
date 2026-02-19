@@ -208,6 +208,7 @@ __marimo__/
 
 /data
 /outputs
+/backend/data
 
 # Frontend / Next.js
 node_modules/
