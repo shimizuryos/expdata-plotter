@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import DynamicPlot from "@/components/DynamicPlot";
 
 const API = "http://localhost:8000/api/data";
@@ -17,6 +17,7 @@ export default function IVSingleTab({ samples }: Props) {
     const [ivPlot, setIvPlot] = useState<any>(null);
     const [rvPlot, setRvPlot] = useState<any>(null);
     const [loading, setLoading] = useState(false);
+    const rawRvDataRef = useRef<{ plot: any; area: number } | null>(null);
 
     useEffect(() => {
         if (!sampleId) return;
@@ -68,6 +69,7 @@ export default function IVSingleTab({ samples }: Props) {
             });
             const data = await res.json();
             setIvPlot(data.iv_plot);
+            rawRvDataRef.current = { plot: data.log_r_v_plot, area };
             applyRvMode(data.log_r_v_plot, area);
         } else {
             const entries = selected.map(m => ({
@@ -81,6 +83,7 @@ export default function IVSingleTab({ samples }: Props) {
             });
             const data = await res.json();
             setIvPlot(data.iv_plot);
+            rawRvDataRef.current = { plot: data.log_r_v_plot, area };
             applyRvMode(data.log_r_v_plot, area);
         }
         setLoading(false);
@@ -102,7 +105,9 @@ export default function IVSingleTab({ samples }: Props) {
     };
 
     useEffect(() => {
-        if (rvPlot) loadPlots();
+        if (rawRvDataRef.current) {
+            applyRvMode(rawRvDataRef.current.plot, rawRvDataRef.current.area);
+        }
     }, [plotMode]);
 
     return (

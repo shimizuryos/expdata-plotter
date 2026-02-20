@@ -356,6 +356,7 @@ def load_log_ra_v_data(yaml_path: str, plot_key: str) -> List[LogRAVSeries]:
 def load_ps_ra_data(yaml_path: str) -> List[RAPsSeries]:
     """
     Load Ps-RA data from YAML.
+    Data rows: [ra, ps, rms, Tp_min, area_um2, label]
     Returns list of RAPsSeries.
     """
     series_list: List[RAPsSeries] = []
@@ -366,7 +367,12 @@ def load_ps_ra_data(yaml_path: str) -> List[RAPsSeries]:
             
         root = payload.get("data", {})
         for group_name, group in root.items():
+            r_p = group.get("r_p", 0.0)
             for key, item in group.items():
+                if key == "r_p":
+                    continue
+                if not isinstance(item, dict):
+                    continue
                 data = item.get("data", [])
                 label = item.get("label", key)
                 color = item.get("color", "tab:blue")
@@ -374,12 +380,19 @@ def load_ps_ra_data(yaml_path: str) -> List[RAPsSeries]:
                 if data:
                     points = []
                     for row in data:
-                        if len(row) >= 3:
+                        if len(row) >= 6:
                             ra_val, ps_val, rms_val = row[0], row[1], row[2]
-                            p_label = row[3] if len(row) >= 4 else None
-                            points.append(RAPsPoint(ra=ra_val, ps=ps_val, rms=rms_val, label=p_label))
+                            tp_min, area_um2, p_label = row[3], row[4], str(row[5])
+                            points.append(RAPsPoint(
+                                ra=ra_val, ps=ps_val, rms=rms_val,
+                                tp_min=tp_min, area_um2=area_um2, label=p_label
+                            ))
+                        elif len(row) >= 3:
+                            points.append(RAPsPoint(ra=row[0], ps=row[1], rms=row[2]))
                     
-                    series_list.append(RAPsSeries(points=points, label=label, color=color))
+                    series_list.append(RAPsSeries(
+                        points=points, label=label, color=color, r_p=r_p
+                    ))
                     
     except FileNotFoundError:
         pass
@@ -387,3 +400,4 @@ def load_ps_ra_data(yaml_path: str) -> List[RAPsSeries]:
         print(f"Error loading yaml: {e}")
         
     return series_list
+

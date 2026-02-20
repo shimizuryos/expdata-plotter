@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import DynamicPlot from "@/components/DynamicPlot";
 
 const API = "http://localhost:8000/api/data";
@@ -15,6 +15,7 @@ export default function IVSimulTab({ samples }: Props) {
     const [rvPlot, setRvPlot] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [rPara, setRPara] = useState<number>(0);
+    const rawRvDataRef = useRef<{ plot: any; entries: any[] } | null>(null);
 
     useEffect(() => {
         if (!sampleId) return;
@@ -71,6 +72,7 @@ export default function IVSimulTab({ samples }: Props) {
         });
         const data = await res.json();
         setIvPlot(data.iv_plot);
+        rawRvDataRef.current = { plot: data.log_r_v_plot, entries };
         transformRvPlot(data.log_r_v_plot, entries);
         setLoading(false);
     };
@@ -88,6 +90,12 @@ export default function IVSimulTab({ samples }: Props) {
             setRvPlot(basePlot);
         }
     };
+
+    useEffect(() => {
+        if (rawRvDataRef.current) {
+            transformRvPlot(rawRvDataRef.current.plot, rawRvDataRef.current.entries);
+        }
+    }, [plotMode]);
 
     return (
         <div className="space-y-4">

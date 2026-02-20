@@ -13,6 +13,8 @@ class RAPsPoint:
     ra: float
     ps: float
     rms: float
+    tp_min: float = 0.0
+    area_um2: float = 1.0
     label: Optional[str] = None
 
 @dataclass
@@ -20,6 +22,7 @@ class RAPsSeries:
     points: List[RAPsPoint]
     label: str
     color: str
+    r_p: float = 0.0
 
 @dataclass
 class LogRAVSeries:
