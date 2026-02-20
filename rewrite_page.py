@@ -1,4 +1,8 @@
-"use client";
+import sys
+
+filepath = "/Users/shimizuryousuke/dev/expdata-plotter/plot-src/expdata-plotter/frontend/src/app/plots/ps-ra/page.tsx"
+
+new_code = """\"\"\"use client\"\"\";
 import { useEffect, useState, useRef, useCallback } from "react";
 import DynamicPlot from "@/components/DynamicPlot";
 import Link from "next/link";
@@ -21,7 +25,7 @@ export default function PsRaPlotPage() {
 
     // Fitting state
     const [selectedSeries, setSelectedSeries] = useState("");
-
+    
     const [fixPsA, setFixPsA] = useState(true);
     const [fixPsB, setFixPsB] = useState(true);
     const [fixLamA, setFixLamA] = useState(false);
@@ -69,7 +73,7 @@ export default function PsRaPlotPage() {
                         if (p.valDB) setValDB(p.valDB);
                         if (p.valVB) setValVB(p.valVB);
                         if (p.weightRatio) setWeightRatio(p.weightRatio);
-
+                        
                         if (p.fixPsA !== undefined) setFixPsA(p.fixPsA);
                         if (p.fixPsB !== undefined) setFixPsB(p.fixPsB);
                         if (p.fixLamA !== undefined) setFixLamA(p.fixLamA);
@@ -87,7 +91,7 @@ export default function PsRaPlotPage() {
 
     const saveParams = () => {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
-            selectedSeries,
+            selectedSeries, 
             fixPsA, fixPsB, fixLamA, fixLamB, fixC, fixDB,
             valPsA, valPsB, valLamA, valLamB, valC, valDB, valVB,
             weightRatio
@@ -157,17 +161,6 @@ export default function PsRaPlotPage() {
                     if (data.status === "done") {
                         clearInterval(pollRef.current!);
                         pollRef.current = null;
-
-                        // Update input fields with the fitted values
-                        if (data.params) {
-                            if (!fixPsA) setValPsA(String(data.params.P_S_A));
-                            if (!fixPsB) setValPsB(String(data.params.P_S_B));
-                            if (!fixLamA) setValLamA(String(data.params.lambda_A));
-                            if (!fixLamB) setValLamB(String(data.params.lambda_B));
-                            if (!fixC) setValC(String(data.params.C));
-                            if (!fixDB) setValDB(String(data.params.D_B));
-                        }
-
                         setFitResult(data);
                         setFitProgress(null);
                         setFitting(false);
@@ -231,15 +224,14 @@ export default function PsRaPlotPage() {
                                 <div>
                                     <div className="flex justify-between mb-1">
                                         <label className={labelCls}>σ_lnR / σ_P</label>
-                                        <span className="font-mono text-xs text-blue-600">{parseFloat(weightRatio).toFixed(2)}</span>
+                                        <span className="font-mono text-xs text-blue-600">{weightRatio}</span>
                                     </div>
-                                    <input type="range" min="-1" max="1" step="0.1"
-                                        className="w-full" value={Math.log10(parseFloat(weightRatio) || 1)}
-                                        onChange={e => setWeightRatio(Math.pow(10, parseFloat(e.target.value)).toString())} />
+                                    <input type="range" min="0.1" max="10" step="0.1"
+                                        className="w-full" value={weightRatio}
+                                        onChange={e => setWeightRatio(e.target.value)} />
                                     <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-                                        <span>← RA fit focus (0.1)</span>
-                                        <span>Balanced (1.0)</span>
-                                        <span>Ps fit focus (10) →</span>
+                                        <span>← RA fit focus</span>
+                                        <span>Ps fit focus →</span>
                                     </div>
                                 </div>
                             </div>
@@ -250,7 +242,7 @@ export default function PsRaPlotPage() {
                                     <h3 className="text-sm font-bold text-gray-700">Parameters</h3>
                                     <span className="text-[10px] text-gray-400">Check to Fix</span>
                                 </div>
-
+                                
                                 <div className="space-y-3">
                                     <div className="grid grid-cols-[auto_60px_1fr] gap-3 items-center">
                                         <div className="w-4"></div>
@@ -263,7 +255,7 @@ export default function PsRaPlotPage() {
                                         <label className={labelCls}>V_B</label>
                                         <input className={inputCls} value={valVB} onChange={e => setValVB(e.target.value)} title="Bias Voltage" />
                                     </div>
-
+                                    
                                     <hr className="my-3 border-gray-100" />
 
                                     {[
@@ -331,9 +323,9 @@ export default function PsRaPlotPage() {
                                     </table>
                                     {fitResult.info && (<>
                                         <hr className={`my-2 ${fitResult.status === "preview" ? "border-blue-200" : "border-green-200"}`} />
-                                        <p className="text-[11px] text-gray-600 font-mono">
-                                            Cost: {fitResult.info?.cost?.toExponential(4)}<br />
-                                            Residual: {fitResult.info?.residual_norm?.toExponential(4)}<br />
+                                        <p className="text-[10px] text-gray-500 font-mono">
+                                            Cost: {fitResult.info?.cost?.toFixed(6)}<br />
+                                            Residual: {fitResult.info?.residual_norm?.toFixed(4)}<br />
                                             Evals: {fitResult.info?.nfev}
                                         </p>
                                     </>)}
@@ -387,3 +379,11 @@ export default function PsRaPlotPage() {
         </div>
     );
 }
+"""
+
+# NextJS 'use client' must not be quoted incorrectly. Oh wait I did \"\"\"use client\"\"\";
+# Let's fix it by replacing the first line properly.
+new_code = new_code.replace('\"\"\"use client\"\"\";', '\"use client\";')
+
+with open(filepath, "w") as f:
+    f.write(new_code)

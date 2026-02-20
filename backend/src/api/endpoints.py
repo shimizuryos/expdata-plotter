@@ -45,7 +45,376 @@ def get_ps_ra_plot():
         raise HTTPException(status_code=404, detail="No data found in yaml")
         
     fig_json = create_ps_ra_plot(series_list)
-    return fig_json
+    
+    # Also return series metadata for the fit UI
+    series_meta = [{
+        "label": "all",
+        "color": "black",
+        "r_p": series_list[0].r_p if series_list else 0,
+        "n_points": sum(len(s.points) for s in series_list),
+    }]
+    for s in series_list:
+        series_meta.append({
+            "label": s.label,
+            "color": s.color,
+            "r_p": s.r_p,
+            "n_points": len(s.points),
+        })
+    return {"plot": fig_json, "series": series_meta}
+
+
+# ─── Ps-RA Fitting ───────────────────────────
+from pydantic import BaseModel
+from typing import Optional
+import uuid
+import threading
+from ..services.ps_ra_fitting import (
+    run_fitting, generate_fit_curves, calc_tox_from_Tp,
+    get_fit_progress, clear_fit_progress, model_Ps_RA,
+)
+import numpy as np
+import plotly.graph_objects as go
+import json
+
+
+class PsRaFitRequest(BaseModel):
+    series_label: str
+    
+    fix_ps_a: bool = True
+    fix_ps_b: bool = True
+    fix_lam_a: bool = False
+    fix_lam_b: bool = False
+    fix_c: bool = False
+    fix_d_b: bool = False
+    
+    init_ps_a: float = 0.5
+    init_ps_b: float = 0.3
+    init_lam_a: float = 1e-9
+    init_lam_b: float = 5e-9
+    init_c: float = 1.0
+    init_d_b: float = 1.0
+    
+    V_B: float = 0.1
+    weight_ratio: float = 1.0  # σ_lnR / σ_P
+
+
+# In-memory store for completed fit results (job_id -> result)
+_fit_results: dict = {}
+_fit_results_lock = threading.Lock()
+
+
+def _resolve_data_path():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(base_dir, "../../../"))
+    data_path = os.path.join(project_root, "data/ps_ra_data.yaml")
+    if not os.path.exists(data_path):
+        fallback = os.path.join(os.getcwd(), "data/ps_ra_data.yaml")
+        if os.path.exists(fallback):
+            data_path = fallback
+    return data_path
+
+
+def _build_fit_plots(
+    series_list, target_series, params, fit_curves, body: PsRaFitRequest,
+):
+    """Build 3 Plotly plots: Ps-tox, RA-tox, Ps-RA."""
+    # Data points
+    pts = target_series.points
+    tox_data = calc_tox_from_Tp(np.array([p.tp_min for p in pts]))
+    ra_data = np.array([p.ra for p in pts])
+    ps_data = np.array([p.ps for p in pts])
+    area_data = np.array([p.area_um2 for p in pts])
+    labels = [p.label or "" for p in pts]
+    
+    # Correct RA for parasitic resistance
+    ra_corr = ra_data - target_series.r_p * area_data
+
+    tox_fit = np.array(fit_curves["tox"])
+    ps_fit = np.array(fit_curves["Ps"])
+    ra_fit = np.array(fit_curves["RA"])
+
+    # ── Plot 1: Ps vs t_ox ──
+    fig_ps_tox = go.Figure()
+    fig_ps_tox.add_trace(go.Scatter(
+        x=(tox_data * 1e9).tolist(), y=ps_data.tolist(),
+        mode="markers", name=target_series.label,
+        marker=dict(color=target_series.color, size=8),
+        text=labels, hovertemplate="<b>%{text}</b><br>t_ox: %{x:.2f} nm<br>Ps: %{y:.3f}<extra></extra>",
+    ))
+    fig_ps_tox.add_trace(go.Scatter(
+        x=(tox_fit * 1e9).tolist(), y=ps_fit.tolist(),
+        mode="lines", name="Fit",
+        line=dict(color="black", dash="dash"),
+    ))
+    fig_ps_tox.update_layout(
+        title="Ps vs t_ox", xaxis_title="t_ox (nm)", yaxis_title="Ps",
+        plot_bgcolor="white", hovermode="closest",
+    )
+
+    # ── Plot 2: RA vs t_ox (log scale) ──
+    fig_ra_tox = go.Figure()
+    fig_ra_tox.add_trace(go.Scatter(
+        x=(tox_data * 1e9).tolist(), y=ra_corr.tolist(),
+        mode="markers", name=target_series.label,
+        marker=dict(color=target_series.color, size=8),
+        text=labels, hovertemplate="<b>%{text}</b><br>t_ox: %{x:.2f} nm<br>RA: %{y:.1f}<extra></extra>",
+    ))
+    fig_ra_tox.add_trace(go.Scatter(
+        x=(tox_fit * 1e9).tolist(), y=ra_fit,
+        mode="lines", name="Fit",
+        line=dict(color="black", dash="dash"),
+    ))
+    fig_ra_tox.update_layout(
+        title="RA vs t_ox", xaxis_title="t_ox (nm)",
+        yaxis_title="RA (Ω·μm²)", yaxis_type="log",
+        plot_bgcolor="white", hovermode="closest",
+    )
+
+    # ── Plot 3: Ps vs RA (original scatter + fit curve) ──
+    fig_ps_ra = go.Figure()
+    # Add all series as scatter
+    for s in series_list:
+        ra_list = [p.ra for p in s.points]
+        ps_list = [p.ps for p in s.points]
+        rms_list = [p.rms for p in s.points]
+        s_labels = [p.label or "" for p in s.points]
+        fig_ps_ra.add_trace(go.Scatter(
+            x=ra_list, y=ps_list, mode="markers", name=s.label,
+            customdata=s_labels,
+            error_y=dict(type="data", array=rms_list, visible=True, color=s.color),
+            marker=dict(color=s.color, size=10),
+            hovertemplate=(
+                f"<b>{s.label}</b><br>Label: %{{customdata}}<br>"
+                "RA: %{x:.2f}<br>Ps: %{y:.3f}<extra></extra>"
+            ),
+        ))
+    # Add fit curve (Ps vs RA parametric)
+    fig_ps_ra.add_trace(go.Scatter(
+        x=ra_fit, y=ps_fit.tolist(),
+        mode="lines", name="Fit Curve",
+        line=dict(color="black", width=2, dash="dash"),
+    ))
+    fig_ps_ra.update_layout(
+        title="Ps vs RA (with Fit)", xaxis_title="RA (Ω·μm²)",
+        yaxis_title="Ps", xaxis_type="log",
+        plot_bgcolor="white", hovermode="closest",
+    )
+
+    return {
+        "ps_tox": json.loads(fig_ps_tox.to_json()),
+        "ra_tox": json.loads(fig_ra_tox.to_json()),
+        "ps_ra": json.loads(fig_ps_ra.to_json()),
+    }
+
+
+class PsRaPreviewRequest(BaseModel):
+    series_label: str
+    init_ps_a: float = 0.5
+    init_ps_b: float = 0.3
+    init_lam_a: float = 1e-9
+    init_lam_b: float = 5e-9
+    init_c: float = 1.0
+    init_d_b: float = 1.0
+    V_B: float = 0.1
+    weight_ratio: float = 1.0
+
+
+@router.post("/plots/ps-ra/preview")
+def preview_ps_ra_model(body: PsRaPreviewRequest):
+    """Evaluate model with given params and overlay on data (no fitting)."""
+    data_path = _resolve_data_path()
+    if not os.path.exists(data_path):
+        raise HTTPException(status_code=404, detail="Data file not found")
+
+    series_list = load_ps_ra_data(data_path)
+
+    # Resolve target series
+    if body.series_label == "all":
+        from ..models.analysis_types import RAPsSeries
+        all_points = []
+        r_p_val = series_list[0].r_p if series_list else 0.0
+        for s in series_list:
+            all_points.extend(s.points)
+        target = RAPsSeries(points=all_points, label="all", color="black", r_p=r_p_val)
+    else:
+        target = None
+        for s in series_list:
+            if s.label == body.series_label:
+                target = s
+                break
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"Series '{body.series_label}' not found")
+
+    params = {
+        "D_A": 1.0, "D_B": body.init_d_b,
+        "lambda_A": body.init_lam_a, "lambda_B": body.init_lam_b,
+        "C": body.init_c,
+        "P_S_A": body.init_ps_a, "P_S_B": body.init_ps_b
+    }
+
+    # Calculate current cost and residual for the UI
+    from ..services.ps_ra_fitting import LikelihoodCalculator
+    pts = target.points
+    Tp_arr = np.array([p.tp_min for p in pts])
+    tox_arr_all = calc_tox_from_Tp(Tp_arr)
+    Ps_arr = np.array([p.ps for p in pts])
+    RA_arr = np.array([p.ra for p in pts])
+    A_arr = np.array([p.area_um2 for p in pts])
+    RA_corr_arr = RA_arr - target.r_p * A_arr
+
+    valid_mask = np.isfinite(RA_corr_arr) & (RA_corr_arr > 0) & np.isfinite(Ps_arr)
+    tox_v = tox_arr_all[valid_mask]
+    Ps_v = Ps_arr[valid_mask]
+    lnRA_v = np.log(RA_corr_arr[valid_mask])
+
+    calc = LikelihoodCalculator(
+        tox_v=tox_v, Ps_v=Ps_v, lnRA_v=lnRA_v,
+        V_B=body.V_B, sigma_P=1.0, sigma_lnR=body.weight_ratio,
+        fix_flags={"P_S_A": True, "P_S_B": True, "lambda_A": True, "lambda_B": True, "C": True, "D_B": True},
+        init_vals={"P_S_A": body.init_ps_a, "P_S_B": body.init_ps_b, "lambda_A": body.init_lam_a, "lambda_B": body.init_lam_b, "C": body.init_c, "D_B": body.init_d_b, "D_A": 1.0}
+    )
+    res_fun = calc.residuals(np.array([]))
+    cost = float(0.5 * np.sum(res_fun**2))
+    residual_norm = float(np.linalg.norm(res_fun))
+
+    # Generate curves over full t_ox range from all series
+    all_tp = []
+    for s in series_list:
+        all_tp.extend([p.tp_min for p in s.points])
+    tox_all = calc_tox_from_Tp(np.array(all_tp))
+    tox_min = float(tox_all.min()) * 0.2
+    tox_max = float(tox_all.max()) * 2.0
+
+    fit_curves = generate_fit_curves(
+        params, (tox_min, tox_max), n_points=500, V_B=body.V_B,
+    )
+
+    # Reuse the same plot builder with a dummy PsRaFitRequest
+    dummy_body = PsRaFitRequest(
+        series_label=body.series_label, V_B=body.V_B,
+    )
+    plots = _build_fit_plots(series_list, target, params, fit_curves, dummy_body)
+
+    return {
+        "status": "preview",
+        "params": params,
+        "info": {
+            "cost": cost,
+            "residual_norm": residual_norm,
+            "nfev": 1
+        },
+        "plots": plots,
+    }
+
+
+@router.post("/plots/ps-ra/fit")
+def start_ps_ra_fit(body: PsRaFitRequest):
+    """Start async Ps-RA fitting job. Returns job_id for polling."""
+    data_path = _resolve_data_path()
+    if not os.path.exists(data_path):
+        raise HTTPException(status_code=404, detail="Data file not found")
+
+    series_list = load_ps_ra_data(data_path)
+    
+    # Handle "all" - merge all series into one virtual target
+    if body.series_label == "all":
+        from ..models.analysis_types import RAPsSeries, RAPsPoint
+        all_points = []
+        r_p_val = series_list[0].r_p if series_list else 0.0
+        for s in series_list:
+            all_points.extend(s.points)
+        if len(all_points) < 2:
+            raise HTTPException(status_code=400, detail="Need at least 2 data points")
+        target = RAPsSeries(points=all_points, label="all", color="black", r_p=r_p_val)
+    else:
+        target = None
+        for s in series_list:
+            if s.label == body.series_label:
+                target = s
+                break
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"Series '{body.series_label}' not found")
+        if len(target.points) < 2:
+            raise HTTPException(status_code=400, detail="Need at least 2 data points")
+
+    job_id = str(uuid.uuid4())[:8]
+
+    def _run():
+        pts = target.points
+        Tp = np.array([p.tp_min for p in pts])
+        Ps = np.array([p.ps for p in pts])
+        RA = np.array([p.ra for p in pts])
+        A  = np.array([p.area_um2 for p in pts])
+
+        fix_flags = {
+            "P_S_A": body.fix_ps_a, "P_S_B": body.fix_ps_b,
+            "lambda_A": body.fix_lam_a, "lambda_B": body.fix_lam_b,
+            "C": body.fix_c, "D_B": body.fix_d_b,
+        }
+        init_vals = {
+            "P_S_A": body.init_ps_a, "P_S_B": body.init_ps_b,
+            "lambda_A": body.init_lam_a, "lambda_B": body.init_lam_b,
+            "C": body.init_c, "D_B": body.init_d_b,
+            "D_A": 1.0,
+        }
+
+        try:
+            params, info = run_fitting(
+                Tp, Ps, RA, A,
+                R_para_ohm=target.r_p,
+                V_B=body.V_B,
+                weight_ratio=body.weight_ratio,
+                fix_flags=fix_flags,
+                init_vals=init_vals,
+                job_id=job_id,
+            )
+
+            # Generate fit curves over extended t_ox range
+            # Use ALL series data to determine range for wider coverage
+            all_tp = []
+            for s in series_list:
+                all_tp.extend([p.tp_min for p in s.points])
+            tox_all = calc_tox_from_Tp(np.array(all_tp))
+            tox_min = float(tox_all.min()) * 0.2
+            tox_max = float(tox_all.max()) * 2.0
+            fit_curves = generate_fit_curves(
+                params, (tox_min, tox_max), n_points=500, V_B=body.V_B,
+            )
+
+            plots = _build_fit_plots(series_list, target, params, fit_curves, body)
+
+            with _fit_results_lock:
+                _fit_results[job_id] = {
+                    "status": "done",
+                    "params": params,
+                    "info": info,
+                    "plots": plots,
+                }
+        except Exception as e:
+            with _fit_results_lock:
+                _fit_results[job_id] = {"status": "error", "error": str(e)}
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    return {"job_id": job_id}
+
+
+@router.get("/plots/ps-ra/fit/{job_id}")
+def get_ps_ra_fit_result(job_id: str):
+    """Poll for fit progress / result."""
+    # Check completed results first
+    with _fit_results_lock:
+        result = _fit_results.get(job_id)
+    if result:
+        return result
+
+    # Check progress
+    progress = get_fit_progress(job_id)
+    if progress:
+        return progress
+
+    raise HTTPException(status_code=404, detail="Job not found")
 
 @router.get("/plots/iv")
 def get_iv_plot():
@@ -115,7 +484,14 @@ def get_plot(plot_id: str):
     if plot_type == "log_ra_v":
         series_list = load_log_ra_v_data(found_file, plot_id)
         if not series_list:
-             raise HTTPException(status_code=404, detail="No data found for plot")
+             raise HTTPException(
+                 status_code=404,
+                 detail=(
+                     f"No data found for plot '{plot_id}'. "
+                     "IV data files may be on an external drive that is not mounted. "
+                     "Check that the file_path entries in iv_plot_data.yaml are accessible."
+                 ),
+             )
         
         # Determine title from ID or config?
         title = plot_id

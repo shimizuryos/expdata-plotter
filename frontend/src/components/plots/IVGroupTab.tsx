@@ -16,6 +16,7 @@ export default function IVGroupTab({ samples }: Props) {
     const [ivPlot, setIvPlot] = useState<any>(null);
     const [rvPlot, setRvPlot] = useState<any>(null);
     const [loading, setLoading] = useState(false);
+    const rawRvDataRef = useRef<{ plot: any; entries: any[] } | null>(null);
 
     // Fitting state
     const [rPara, setRPara] = useState<number>(0);
@@ -81,21 +82,31 @@ export default function IVGroupTab({ samples }: Props) {
         });
         const data = await res.json();
         setIvPlot(data.iv_plot);
-
-        // For group plot, default to RA mode
-        if (plotMode === "logRA") {
-            const modified = { ...data.log_r_v_plot };
-            modified.data = data.log_r_v_plot.data.map((trace: any, i: number) => ({
-                ...trace,
-                y: trace.y.map((r: number) => r * (entriesWithRs[i]?.area_um2 || 1)),
-            }));
-            modified.layout = { ...data.log_r_v_plot.layout, yaxis: { ...data.log_r_v_plot.layout.yaxis, title: { text: "RA (Ω·μm²)" } }, title: "Log RA vs V" };
-            setRvPlot(modified);
-        } else {
-            setRvPlot(data.log_r_v_plot);
-        }
+        rawRvDataRef.current = { plot: data.log_r_v_plot, entries: entriesWithRs };
+        applyPlotMode(data.log_r_v_plot, entriesWithRs);
         setLoading(false);
     };
+
+    const applyPlotMode = (basePlot: any, entries: any[]) => {
+        if (!basePlot) return;
+        if (plotMode === "logRA") {
+            const modified = { ...basePlot };
+            modified.data = basePlot.data.map((trace: any, i: number) => ({
+                ...trace,
+                y: trace.y.map((r: number) => r * (entries[i]?.area_um2 || 1)),
+            }));
+            modified.layout = { ...basePlot.layout, yaxis: { ...basePlot.layout.yaxis, title: { text: "RA (Ω·μm²)" } }, title: "Log RA vs V" };
+            setRvPlot(modified);
+        } else {
+            setRvPlot(basePlot);
+        }
+    };
+
+    useEffect(() => {
+        if (rawRvDataRef.current) {
+            applyPlotMode(rawRvDataRef.current.plot, rawRvDataRef.current.entries);
+        }
+    }, [plotMode]);
 
     const handleFit = async () => {
         const entries = await buildEntries();
@@ -118,17 +129,8 @@ export default function IVGroupTab({ samples }: Props) {
             // Apply fitted plots
             if (data.plots) {
                 setIvPlot(data.plots.iv_plot);
-                if (plotMode === "logRA") {
-                    const modified = { ...data.plots.log_r_v_plot };
-                    modified.data = data.plots.log_r_v_plot.data.map((trace: any, i: number) => ({
-                        ...trace,
-                        y: trace.y.map((r: number) => r * (entries[i]?.area_um2 || 1)),
-                    }));
-                    modified.layout = { ...data.plots.log_r_v_plot.layout, yaxis: { ...data.plots.log_r_v_plot.layout.yaxis, title: { text: "RA (Ω·μm²)" } }, title: "Log RA vs V (Fitted)" };
-                    setRvPlot(modified);
-                } else {
-                    setRvPlot(data.plots.log_r_v_plot);
-                }
+                rawRvDataRef.current = { plot: data.plots.log_r_v_plot, entries };
+                applyPlotMode(data.plots.log_r_v_plot, entries);
             }
         } finally {
             setIsFitting(false);
@@ -231,7 +233,7 @@ export default function IVGroupTab({ samples }: Props) {
                     </div>
                     <div className="bg-white p-2 rounded border">
                         <div className="flex justify-end mb-1">
-                            <button onClick={() => { setPlotMode(plotMode === "logR" ? "logRA" : "logR"); loadPlots(); }}
+                            <button onClick={() => setPlotMode(plotMode === "logR" ? "logRA" : "logR")}
                                 className="text-xs px-3 py-1 bg-gray-200 rounded hover:bg-gray-300">
                                 {plotMode === "logR" ? "Switch to log RA-V" : "Switch to log R-V"}
                             </button>
