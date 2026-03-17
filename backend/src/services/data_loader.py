@@ -2,7 +2,11 @@ from typing import List, Tuple, Sequence, Optional, Dict
 import pandas as pd
 import re
 import yaml
-from ..models.analysis_types import ParsedIVSeries, RAPsSeries, RAPsPoint
+from ..models.analysis_types import (
+    ParsedIVSeries, RAPsSeries, RAPsPoint, LogRAVSeries,
+    HanleRawSeries, HanleBroadSeries, HanleNarrowSeries
+)
+from ..utils import units
 
 def load_iv_data(file_path: str) -> ParsedIVSeries:
     """
@@ -36,8 +40,8 @@ def load_iv_data(file_path: str) -> ParsedIVSeries:
                     warnings.append(f"line {line_index}: Cannot parse numbers")
                     continue
 
-                id_milliamp.append(id_amp * 1_000.0)
-                vd_millivolt.append(vd_volt * 1_000.0)
+                id_milliamp.append(id_amp)
+                vd_millivolt.append(vd_volt)
                 resistance_ohm.append(r_ohm)
     except FileNotFoundError:
         warnings.append(f"File not found: {file_path}")
@@ -45,8 +49,8 @@ def load_iv_data(file_path: str) -> ParsedIVSeries:
         warnings.append(f"Error reading file: {e}")
 
     return ParsedIVSeries(
-        id_mA=id_milliamp,
-        vd_mV=vd_millivolt,
+        id_A=id_milliamp,
+        vd_V=vd_millivolt,
         r_ohm=resistance_ohm,
         warnings=warnings,
     )
@@ -117,22 +121,22 @@ def parse_iv_csv(file_path: str) -> ParsedIVSeries:
             # warnings.append(f"line {i+1}: Numeric conversion failed")
             continue
 
-        id_list.append(id_val * 1e3)
-        vd_list.append(vd_val * 1e3)
+        id_list.append(id_val)
+        vd_list.append(vd_val)
         r_list.append(r_val)
 
     if not id_list:
         raise ValueError("No valid DataValue rows found")
 
-    return ParsedIVSeries(id_mA=id_list, vd_mV=vd_list, r_ohm=r_list, warnings=warnings)
+    return ParsedIVSeries(id_A=id_list, vd_V=vd_list, r_ohm=r_list, warnings=warnings)
 
-def read_hanle_raw_data(file_path: str) -> Tuple[List[float], List[float]]:
+def read_hanle_raw_data(file_path: str) -> HanleRawSeries:
     """
     Simple Hanle reader (skip 1st line, take first 2 cols).
-    Returns (magnetic_field_Oe, voltage_uV).
+    Returns HanleRawSeries in T and V.
     """
-    magnetic_field_Oe: List[float] = []
-    voltage_uV: List[float] = []
+    magnetic_field_T: List[float] = []
+    voltage_V: List[float] = []
 
     with open(file_path, "r", encoding="utf-8") as f:
         for idx, line in enumerate(f):
@@ -145,12 +149,13 @@ def read_hanle_raw_data(file_path: str) -> Tuple[List[float], List[float]]:
             if len(cols) < 2:
                 continue
             try:
-                magnetic_field_Oe.append(float(cols[0]))
-                voltage_uV.append(float(cols[1])*1_000_000)
+                # Raw data assumed to be in Oe and V natively
+                magnetic_field_T.append(units.Oe_to_T(float(cols[0])))
+                voltage_V.append(float(cols[1]))
             except ValueError:
                 continue
 
-    return magnetic_field_Oe, voltage_uV
+    return HanleRawSeries(magnetic_field_T=magnetic_field_T, voltage_V=voltage_V)
 
 def read_hanle_data(file_path: str) -> List[List[List[float]]]:
     """
@@ -194,8 +199,8 @@ def read_hanle_data(file_path: str) -> List[List[List[float]]]:
                 except ValueError:
                     continue
 
-                current_b.append(b_val)
-                current_v.append(v_val * 1_000_000)
+                current_b.append(units.Oe_to_T(b_val))
+                current_v.append(v_val)
 
         flush_current_if_needed()
     except FileNotFoundError:
@@ -203,14 +208,10 @@ def read_hanle_data(file_path: str) -> List[List[List[float]]]:
 
     return series_list
 
-def read_hanle_broad(
-    file_path: str,
-) -> Tuple[Dict[str, float], List[List[float]], List[List[float]], List[List[float]]]:
+def read_hanle_broad(file_path: str) -> Optional[HanleBroadSeries]:
     """
     Extracts params and specific data sections for Hanle Broad.
-    Returns (params_dict, exp_data, fitting_data, broad_fitting_data).
     """
-    # Parse header for parameters
     params = {}
     
     def _parse_header_params(path: str) -> Dict[str, float]:
@@ -247,42 +248,39 @@ def read_hanle_broad(
     params = _parse_header_params(file_path)
     series = read_hanle_data(file_path)
 
-    # Note: exp and fitting order is reversed in data file usually (0: fitting, 1: exp)
     if len(series) >= 2:
         exp_data = series[1]
         fitting_data = series[0]
         broad_fitting_data = []
-        if len(series) >= 3:
-             # Logic from original code: if 4 sections, index 3 is broad? if 3, index 2 is broad?
-             # Original: 
-             # if len=4: broad=series[3]
-             # elif len=3: broad=series[2]
-            if len(series) == 4:
-                broad_fitting_data = series[3]
-            else:
-                broad_fitting_data = series[2]
+        if len(series) == 4:
+            broad_fitting_data = series[3]
+        elif len(series) == 3:
+            broad_fitting_data = series[2]
         
-        return params, exp_data, fitting_data, broad_fitting_data
+        # We need to reshape the list of columns to matching what frontend/components expect 
+        # But wait, read_hanle_data returns [[b, v], [b, v]...] so it's already a list of series where each series is two lists.
+        # Actually it returns [current_b, current_v]
+        return HanleBroadSeries(
+            params=params,
+            exp_data=exp_data,
+            fitting_data=fitting_data,
+            broad_fitting_data=broad_fitting_data
+        )
     
-    return params, [], [], []
+    return None
 
-def read_hanle_n_only(
-    file_path: str,
-) -> Tuple[List[List[float]], List[List[float]]]:
+def read_hanle_n_only(file_path: str) -> Optional[HanleNarrowSeries]:
     """
     Extracts (exp_data, fitting_data) from Hanle data.
     """
     series = read_hanle_data(file_path)
     if len(series) < 2:
-        # raise ValueError or return empty
-        return [], []
-    exp_data = series[1]
-    fitting_data = series[0]
-    return exp_data, fitting_data
-
-    return exp_data, fitting_data
-
-from ..models.analysis_types import ParsedIVSeries, RAPsSeries, RAPsPoint, LogRAVSeries
+        return None
+    
+    return HanleNarrowSeries(
+        exp_data=series[1],
+        fitting_data=series[0]
+    )
 
 def load_log_ra_v_data(yaml_path: str, plot_key: str) -> List[LogRAVSeries]:
     """
@@ -331,13 +329,16 @@ def load_log_ra_v_data(yaml_path: str, plot_key: str) -> List[LogRAVSeries]:
                      # For now, if no data, skip
                      continue
 
-                # Calculate RA
-                # ra_ohm_um2 = r_ohm * area_um2
-                ra_list = [r * area_um2 for r in iv_series.r_ohm]
+                
+                # Assume area given in um^2 from YAML for now, but save as m^2
+                area_m2 = units.convert_area_um2_to_m2(area_um2)
+                
+                # Resistance is in Ohms natively.
+                ra_list = [r * area_m2 for r in iv_series.r_ohm]
                 
                 series_list.append(LogRAVSeries(
-                    vd_mV=iv_series.vd_mV,
-                    ra_ohm_um2=ra_list,
+                    vd_V=iv_series.vd_V,
+                    ra_ohm_m2=ra_list,
                     label=item_key,
                     color=color,
                     group_label=group_key
@@ -377,21 +378,31 @@ def load_ps_ra_data(yaml_path: str) -> List[RAPsSeries]:
                 label = item.get("label", key)
                 color = item.get("color", "tab:blue")
                 
+                
                 if data:
                     points = []
                     for row in data:
                         if len(row) >= 6:
-                            ra_val, ps_val, rms_val = row[0], row[1], row[2]
-                            tp_min, area_um2, p_label = row[3], row[4], str(row[5])
+                            # row[0] was ra in ohm*um2 => convert to ohm*m2
+                            ra_m2 = units.convert_RA_ohm_um2_to_ohm_m2(row[0])
+                            ps_val = float(row[1]) # already decimal format thanks to user update
+                            rms_val = float(row[2])
+                            tp_s = units.min_to_s(float(row[3]))
+                            area_m2 = units.convert_area_um2_to_m2(float(row[4]))
+                            p_label = str(row[5])
+                            
                             points.append(RAPsPoint(
-                                ra=ra_val, ps=ps_val, rms=rms_val,
-                                tp_min=tp_min, area_um2=area_um2, label=p_label
+                                ra_ohm_m2=ra_m2, ps=ps_val, rms=rms_val,
+                                tp_s=tp_s, area_m2=area_m2, label=p_label
                             ))
                         elif len(row) >= 3:
-                            points.append(RAPsPoint(ra=row[0], ps=row[1], rms=row[2]))
+                            ra_m2 = units.convert_RA_ohm_um2_to_ohm_m2(row[0])
+                            ps_val = float(row[1])
+                            rms_val = float(row[2])
+                            points.append(RAPsPoint(ra_ohm_m2=ra_m2, ps=ps_val, rms=rms_val))
                     
                     series_list.append(RAPsSeries(
-                        points=points, label=label, color=color, r_p=r_p
+                        points=points, label=label, color=color, r_p_ohm=r_p
                     ))
                     
     except FileNotFoundError:

@@ -33,7 +33,11 @@ export function DeviceGroupSection({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(data)
         });
-        if (!res.ok) throw new Error((await res.json()).detail);
+        if (!res.ok) {
+            const err = await res.json();
+            const errMsg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+            throw new Error(errMsg);
+        }
 
         await onRefreshGroups();
     };
@@ -45,7 +49,11 @@ export function DeviceGroupSection({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ coord, variations })
         });
-        if (!res.ok) throw new Error((await res.json()).detail);
+        if (!res.ok) {
+            const err = await res.json();
+            const errMsg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+            throw new Error(errMsg);
+        }
 
         await onRefreshGroups();
         // Trigger refresh of devices list is handled by parent or effect there?

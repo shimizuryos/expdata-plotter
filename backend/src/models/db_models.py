@@ -9,7 +9,9 @@ class LayerStructure:
 @dataclass
 class Device:
     device_id: str
-    area_um2: float
+    area_m2: float
+    x_coord: int
+    y_coord: int
     note: str = ""
     # Map measurement_type -> measurement_id (e.g. {"Hanle": "meas_123"})
     default_measurements: Dict[str, str] = field(default_factory=dict)
@@ -30,6 +32,8 @@ class Sample:
     device_groups: List[DeviceGroup]
     note: str = ""
     r_parasitic: Optional[float] = None  # R_para (ohm), shared across all devices
+    max_x: int = 22
+    max_y: int = 22
 
 @dataclass
 class Measurement:

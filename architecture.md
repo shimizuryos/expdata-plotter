@@ -34,6 +34,8 @@ The backend is organized into a modular structure to separate concerns between d
 | &nbsp;&nbsp;`cascade_iv_service.py` | **Static Plotting**. Matplotlib logic for Cascade IV curves (used in notebooks). |
 | &nbsp;&nbsp;`hanle_service.py` | **Static Plotting**. Matplotlib logic for Hanle effect analysis (used in notebooks). |
 | &nbsp;&nbsp;`ra_ps_service.py` | **Static Plotting**. Matplotlib logic for RA-Ps summary plots (used in notebooks). |
+| **`utils/`** | **Utilities**. |
+| &nbsp;&nbsp;`units.py` | Centralized basic unit conversions representing single-dimensional transformations. Composed by physical quantity classes. |
 
 ---
 
@@ -56,3 +58,5 @@ The frontend is a Next.js application used for viewing interactive plots.
 3.  **Visualization Separation**:
     - **Matplotlib** (`*_service.py`) is used for static, publication-quality figures in notebooks.
     - **Plotly** (`interactive_plotter.py`) is used for interactive data exploration in both the Web App and Notebooks.
+4.  **Strict SI Units**: The database (`db_models.py`) and all internal calculations exclusively use SI units ($m^2$, $\Omega\cdot m^2$, $V$, $T$). Conversions happen at the outer UI boundaries managed by `units.py` scaling.
+5.  **Hanle Structural Separation**: Raw, Broad, and Narrow Hanle experiments have distinct parsing routes and Pydantic models (`HanleBroadSeries` etc.) to ensure strict typing across radically differing parameter bounds.

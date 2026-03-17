@@ -48,8 +48,11 @@ def init_db(db_path: str = None):
         device_type TEXT NOT NULL DEFAULT 'three_terminal_hanle',
         structures  TEXT NOT NULL,      -- JSON list of layers
         device_groups TEXT NOT NULL,    -- JSON list of device groups
-        note        TEXT DEFAULT '',
-        created_at  TEXT DEFAULT (datetime('now'))
+        note        TEXT,
+        r_parasitic REAL,               -- Can be NULL
+        max_x       INTEGER DEFAULT 22,
+        max_y       INTEGER DEFAULT 22,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     """)
 

@@ -4,18 +4,50 @@ from ..services.interactive_plotter import create_ps_ra_plot, create_iv_plot, cr
 import os
 import shutil
 from fastapi import UploadFile, File
+from ..utils import units
 
 router = APIRouter()
 
 UPLOAD_DIR = "data/raw"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+from typing import Optional
+from fastapi import UploadFile, File, Form
+from ..services.data_loader import (
+    read_hanle_raw_data, 
+    read_hanle_broad, 
+    read_hanle_n_only
+)
+
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    hanle_type: Optional[str] = Form(None)
+):
     file_location = f"{UPLOAD_DIR}/{file.filename}"
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(file.file, file_object)
-    return {"info": f"file '{file.filename}' saved at '{file_location}'"}
+    
+    response_data = {"info": f"file '{file.filename}' saved at '{file_location}'"}
+    
+    if hanle_type:
+        try:
+            if hanle_type == "raw":
+                parsed = read_hanle_raw_data(file_location)
+                response_data["hanle_parsed"] = "success"
+                # You could extract basic info like len(parsed.voltage_V)
+            elif hanle_type == "broad":
+                parsed = read_hanle_broad(file_location)
+                response_data["hanle_parsed"] = "success" if parsed else "failed"
+            elif hanle_type == "narrow":
+                parsed = read_hanle_n_only(file_location)
+                response_data["hanle_parsed"] = "success" if parsed else "failed"
+            else:
+                response_data["hanle_parsed"] = "unsupported format"
+        except Exception as e:
+            response_data["hanle_parsed_error"] = str(e)
+
+    return response_data
 
 @router.get("/plots/ps-ra")
 def get_ps_ra_plot():
@@ -50,14 +82,14 @@ def get_ps_ra_plot():
     series_meta = [{
         "label": "all",
         "color": "black",
-        "r_p": series_list[0].r_p if series_list else 0,
+        "r_p": series_list[0].r_p_ohm if series_list else 0,
         "n_points": sum(len(s.points) for s in series_list),
     }]
     for s in series_list:
         series_meta.append({
             "label": s.label,
             "color": s.color,
-            "r_p": s.r_p,
+            "r_p": s.r_p_ohm,
             "n_points": len(s.points),
         })
     return {"plot": fig_json, "series": series_meta}
@@ -120,14 +152,14 @@ def _build_fit_plots(
     """Build 3 Plotly plots: Ps-tox, RA-tox, Ps-RA."""
     # Data points
     pts = target_series.points
-    tox_data = calc_tox_from_Tp(np.array([p.tp_min for p in pts]))
-    ra_data = np.array([p.ra for p in pts])
+    tox_data = calc_tox_from_Tp(np.array([units.s_to_min(p.tp_s) for p in pts]))
+    ra_data = np.array([units.convert_RA_ohm_m2_to_ohm_um2(p.ra_ohm_m2) for p in pts])
     ps_data = np.array([p.ps for p in pts])
-    area_data = np.array([p.area_um2 for p in pts])
+    area_data = np.array([units.convert_area_m2_to_um2(p.area_m2) for p in pts])
     labels = [p.label or "" for p in pts]
     
     # Correct RA for parasitic resistance
-    ra_corr = ra_data - target_series.r_p * area_data
+    ra_corr = ra_data - target_series.r_p_ohm * area_data
 
     tox_fit = np.array(fit_curves["tox"])
     ps_fit = np.array(fit_curves["Ps"])
@@ -174,7 +206,7 @@ def _build_fit_plots(
     fig_ps_ra = go.Figure()
     # Add all series as scatter
     for s in series_list:
-        ra_list = [p.ra for p in s.points]
+        ra_list = [units.convert_RA_ohm_m2_to_ohm_um2(p.ra_ohm_m2) for p in s.points]
         ps_list = [p.ps for p in s.points]
         rms_list = [p.rms for p in s.points]
         s_labels = [p.label or "" for p in s.points]
@@ -232,10 +264,10 @@ def preview_ps_ra_model(body: PsRaPreviewRequest):
     if body.series_label == "all":
         from ..models.analysis_types import RAPsSeries
         all_points = []
-        r_p_val = series_list[0].r_p if series_list else 0.0
+        r_p_val = series_list[0].r_p_ohm if series_list else 0.0
         for s in series_list:
             all_points.extend(s.points)
-        target = RAPsSeries(points=all_points, label="all", color="black", r_p=r_p_val)
+        target = RAPsSeries(points=all_points, label="all", color="black", r_p_ohm=r_p_val)
     else:
         target = None
         for s in series_list:
@@ -255,12 +287,12 @@ def preview_ps_ra_model(body: PsRaPreviewRequest):
     # Calculate current cost and residual for the UI
     from ..services.ps_ra_fitting import LikelihoodCalculator
     pts = target.points
-    Tp_arr = np.array([p.tp_min for p in pts])
+    Tp_arr = np.array([units.s_to_min(p.tp_s) for p in pts])
     tox_arr_all = calc_tox_from_Tp(Tp_arr)
     Ps_arr = np.array([p.ps for p in pts])
-    RA_arr = np.array([p.ra for p in pts])
-    A_arr = np.array([p.area_um2 for p in pts])
-    RA_corr_arr = RA_arr - target.r_p * A_arr
+    RA_arr = np.array([units.convert_RA_ohm_m2_to_ohm_um2(p.ra_ohm_m2) for p in pts])
+    A_arr = np.array([units.convert_area_m2_to_um2(p.area_m2) for p in pts])
+    RA_corr_arr = RA_arr - target.r_p_ohm * A_arr
 
     valid_mask = np.isfinite(RA_corr_arr) & (RA_corr_arr > 0) & np.isfinite(Ps_arr)
     tox_v = tox_arr_all[valid_mask]
@@ -280,7 +312,7 @@ def preview_ps_ra_model(body: PsRaPreviewRequest):
     # Generate curves over full t_ox range from all series
     all_tp = []
     for s in series_list:
-        all_tp.extend([p.tp_min for p in s.points])
+        all_tp.extend([units.s_to_min(p.tp_s) for p in s.points])
     tox_all = calc_tox_from_Tp(np.array(all_tp))
     tox_min = float(tox_all.min()) * 0.2
     tox_max = float(tox_all.max()) * 2.0
@@ -320,12 +352,12 @@ def start_ps_ra_fit(body: PsRaFitRequest):
     if body.series_label == "all":
         from ..models.analysis_types import RAPsSeries, RAPsPoint
         all_points = []
-        r_p_val = series_list[0].r_p if series_list else 0.0
+        r_p_val = series_list[0].r_p_ohm if series_list else 0.0
         for s in series_list:
             all_points.extend(s.points)
         if len(all_points) < 2:
             raise HTTPException(status_code=400, detail="Need at least 2 data points")
-        target = RAPsSeries(points=all_points, label="all", color="black", r_p=r_p_val)
+        target = RAPsSeries(points=all_points, label="all", color="black", r_p_ohm=r_p_val)
     else:
         target = None
         for s in series_list:
@@ -341,10 +373,10 @@ def start_ps_ra_fit(body: PsRaFitRequest):
 
     def _run():
         pts = target.points
-        Tp = np.array([p.tp_min for p in pts])
+        Tp = np.array([units.s_to_min(p.tp_s) for p in pts])
         Ps = np.array([p.ps for p in pts])
-        RA = np.array([p.ra for p in pts])
-        A  = np.array([p.area_um2 for p in pts])
+        RA = np.array([units.convert_RA_ohm_m2_to_ohm_um2(p.ra_ohm_m2) for p in pts])
+        A  = np.array([units.convert_area_m2_to_um2(p.area_m2) for p in pts])
 
         fix_flags = {
             "P_S_A": body.fix_ps_a, "P_S_B": body.fix_ps_b,
@@ -361,7 +393,7 @@ def start_ps_ra_fit(body: PsRaFitRequest):
         try:
             params, info = run_fitting(
                 Tp, Ps, RA, A,
-                R_para_ohm=target.r_p,
+                R_para_ohm=target.r_p_ohm,
                 V_B=body.V_B,
                 weight_ratio=body.weight_ratio,
                 fix_flags=fix_flags,
@@ -373,7 +405,7 @@ def start_ps_ra_fit(body: PsRaFitRequest):
             # Use ALL series data to determine range for wider coverage
             all_tp = []
             for s in series_list:
-                all_tp.extend([p.tp_min for p in s.points])
+                all_tp.extend([units.s_to_min(p.tp_s) for p in s.points])
             tox_all = calc_tox_from_Tp(np.array(all_tp))
             tox_min = float(tox_all.min()) * 0.2
             tox_max = float(tox_all.max()) * 2.0

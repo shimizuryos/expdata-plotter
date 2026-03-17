@@ -11,8 +11,9 @@ This repository contains tools for analyzing and plotting experimental data, inc
 - **`data/`**: Directory for storing raw data files (YAML, CSV, etc.).
   - Note: This directory is git-ignored. Place your local data files here.
 - **`backend/src/`**: Core logic and utility functions.
-  - `models/`: Data structures (e.g., `RAPsData`).
-  - `services/`: Data loading and plotting logic.
+  - `models/`: strict Pydantic SI data structures (e.g., `RAPsSeries`, `HanleBroadSeries`) and Database hierarchy (Sample > Device > Measurement).
+  - `services/`: Data loading, physics fitting (`ps_ra_fitting.py`), and plotting logic.
+  - `utils/`: Centralized single-dimension unit mappings (`units.py`).
 - **`frontend/`**: Web application frontend (Next.js).
 
 ## Setup
@@ -101,13 +102,16 @@ If you prefer running them separately:
 
 ## Development
 
-- **Data Models**: Defined in `backend/src/models/analysis_types.py`.
+## Development
+
+- **Data Models**: Pydantic validated SI unit models in `backend/src/models/analysis_types.py` and Database mappings in `db_models.py`.
 - **Plotting Logic**: 
   - `backend/src/services/interactive_plotter.py` (Plotly)
   - `backend/src/services/ra_ps_service.py` (Matplotlib)
   - `backend/src/services/hanle_service.py` (Matplotlib)
   - `backend/src/services/cascade_iv_service.py` (Matplotlib)
-- **Data Loading**: All loading logic is centralized in `backend/src/services/data_loader.py`.
+- **Data Loading**: All loading logic is centralized in `backend/src/services/data_loader.py`, routed to explicit types securely natively in SI magnitudes.
+- **Unit Management**: Unified through pure mathematical conversions in `backend/src/utils/units.py`.
 
 ## Git Workflow
 - The `data/` and `outputs/` directories are ignored by git to prevent committing large raw files or sensitive data.
