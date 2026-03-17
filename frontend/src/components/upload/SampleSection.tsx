@@ -20,7 +20,8 @@ export function SampleSection({ samples, selectedSampleId, onSelect, onRefresh }
 
         if (!res.ok) {
             const err = await res.json();
-            throw new Error(err.detail);
+            const errMsg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+            throw new Error(errMsg);
         }
 
         await onRefresh();

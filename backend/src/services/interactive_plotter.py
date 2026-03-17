@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import json
 import math
 from ..models.analysis_types import RAPsSeries
+from ..utils import units
 
 def create_ps_ra_plot(
     series_list: List[RAPsSeries],
@@ -24,7 +25,7 @@ def create_ps_ra_plot(
         if not series.points:
             continue
             
-        ra_list = [p.ra for p in series.points]
+        ra_list = [units.convert_RA_ohm_m2_to_ohm_um2(p.ra_ohm_m2) for p in series.points]
         ps_list = [p.ps for p in series.points]
         rms_list = [p.rms for p in series.points]
         # Use point label if available, otherwise empty string
@@ -139,16 +140,18 @@ def create_log_ra_v_plot(
     seen_groups = set()
     
     for series in series_list:
-        if not series.vd_mV or not series.ra_ohm_um2:
+        if not series.vd_V or not series.ra_ohm_m2:
             continue
             
         # Filter out points in range -5mV to 5mV
         x_data = []
         y_data = []
-        for x, y in zip(series.vd_mV, series.ra_ohm_um2):
-            if not (-5 <= x <= 5):
-                x_data.append(x)
-                y_data.append(y)
+        for x, y in zip(series.vd_V, series.ra_ohm_m2):
+            x_mV = units.V_to_mV(x)
+            y_um2 = units.convert_RA_ohm_m2_to_ohm_um2(y)
+            if not (-5 <= x_mV <= 5):
+                x_data.append(x_mV)
+                y_data.append(y_um2)
 
         if not x_data:
             continue

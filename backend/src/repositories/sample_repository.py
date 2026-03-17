@@ -26,10 +26,10 @@ class SampleRepository:
         with get_db_cursor(commit=True) as cursor:
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO samples (id, name, device_type, structures, device_groups, note, r_parasitic)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO samples (id, name, device_type, structures, device_groups, note, r_parasitic, max_x, max_y)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (sample.id, sample.name, sample.device_type, structures_json, device_groups_json, sample.note, sample.r_parasitic)
+                (sample.id, sample.name, sample.device_type, structures_json, device_groups_json, sample.note, sample.r_parasitic, sample.max_x, sample.max_y)
             )
 
     def get_by_id(self, sample_id: str) -> Optional[Sample]:
@@ -178,11 +178,12 @@ class SampleRepository:
         device_groups_data = json.loads(row["device_groups"])
         device_groups = []
         for dg_data in device_groups_data:
-            # Reconstruct Devices with backward compatibility for default_measurements
             devices = [
                 Device(
                     device_id=d["device_id"],
-                    area_um2=d["area_um2"],
+                    area_m2=d["area_m2"],
+                    x_coord=d.get("x_coord", 0),
+                    y_coord=d.get("y_coord", 0),
                     note=d.get("note", ""),
                     default_measurements=d.get("default_measurements", {})
                 )
@@ -213,5 +214,7 @@ class SampleRepository:
             structures=structures,
             device_groups=device_groups,
             note=row["note"],
-            r_parasitic=r_parasitic
+            r_parasitic=r_parasitic,
+            max_x=row["max_x"] if "max_x" in row.keys() else 22,
+            max_y=row["max_y"] if "max_y" in row.keys() else 22
         )

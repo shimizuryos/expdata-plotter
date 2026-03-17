@@ -25,6 +25,8 @@ class CreateSampleRequest(BaseModel):
     device_type: str = "three_terminal_hanle"
     structures: List[LayerStructureModel]
     note: str = ""
+    max_x: int = 22
+    max_y: int = 22
 
 class VariationModel(BaseModel):
     suffix: str
@@ -85,7 +87,9 @@ def create_sample(req: CreateSampleRequest):
         device_type=req.device_type,
         structures=structures,
         device_groups=[],
-        note=req.note
+        note=req.note,
+        max_x=req.max_x,
+        max_y=req.max_y
     )
     
     sample_repo.insert(sample)
@@ -145,7 +149,8 @@ def create_device_group(sample_id: str, req: CreateDeviceGroupRequest):
         if any(d.device_id == d_id for d in existing_devs):
              raise HTTPException(status_code=400, detail=f"Device ID {d_id} already exists in sample")
              
-        devices.append(Device(device_id=d_id, area_um2=v.area_um2))
+        from ..utils import units
+        devices.append(Device(device_id=d_id, area_m2=units.convert_area_um2_to_m2(v.area_um2), x_coord=req.coord[0], y_coord=req.coord[1]))
 
     new_group = DeviceGroup(
         coord=coord_tuple,
@@ -165,9 +170,10 @@ def create_device_group(sample_id: str, req: CreateDeviceGroupRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    from ..utils import units
     return {
         "coord": new_group.coord,
-        "devices": [{"device_id": d.device_id, "area_um2": d.area_um2} for d in devices]
+        "devices": [{"device_id": d.device_id, "area_um2": units.convert_area_m2_to_um2(d.area_m2)} for d in devices]
     }
 
 @router.post("/measurements", status_code=201)
@@ -274,7 +280,8 @@ def append_devices_to_group(sample_id: str, req: AppendDevicesRequest):
         if any(d.device_id == d_id for d in new_devices):
              raise HTTPException(status_code=400, detail=f"Duplicate Device ID {d_id} in request")
 
-        new_devices.append(Device(device_id=d_id, area_um2=v.area_um2))
+        from ..utils import units
+        new_devices.append(Device(device_id=d_id, area_m2=units.convert_area_um2_to_m2(v.area_um2), x_coord=req.coord[0], y_coord=req.coord[1]))
 
     # Add to group
     # We need to save the sample. 
@@ -356,17 +363,18 @@ def _build_iv_plots(entries: List[dict]):
     iv_fig = go.Figure()
     rv_fig = go.Figure()
 
+    from ..utils import units
     for ent in entries:
         parsed = ent["parsed"]
         label = ent.get("label", "")
         # area = ent["area_um2"] # Used for RA calculation if needed
         r_p = ent.get("r_p", 0.0)
 
-        if not parsed.id_mA:
+        if not parsed.id_A:
             continue
 
-        id_arr = np.array(parsed.id_mA)
-        vd_arr = np.array(parsed.vd_mV)
+        id_arr = np.array([units.A_to_mA(i) for i in parsed.id_A])
+        vd_arr = np.array([units.V_to_mV(v) for v in parsed.vd_V])
         r_arr = np.array(parsed.r_ohm)
 
         # Apply Series R correction: V_corrected = V - I * R_series
@@ -422,7 +430,7 @@ def _build_iv_plots(entries: List[dict]):
 def iv_load(req: IVLoadRequest):
     """Load a single IV file and return Plotly JSON for IV + log R-V."""
     parsed = load_iv_data(req.file_ref)
-    if not parsed.id_mA:
+    if not parsed.id_A:
         return {"iv_plot": None, "log_r_v_plot": None, "warnings": ["No data found"], "raw": []}
     
     entry = {
@@ -484,7 +492,7 @@ def fit_parasitic(req: FitParasiticRequest):
     # Parse data
     p1 = load_iv_data(e1.file_ref)
     p2 = load_iv_data(e2.file_ref)
-    if not p1.id_mA or not p2.id_mA:
+    if not p1.id_A or not p2.id_A:
          raise HTTPException(status_code=400, detail="Data missing in one of the smallest devices")
 
     # Get Max Resistance (R_max) from raw data (approximate peak of R-V curve)
@@ -602,14 +610,15 @@ def get_heatmap_data(sample_id: str):
     x_range = [None, None]
     y_range = [None, None]
 
+    from ..utils import units
     for group in sample.device_groups:
-        cx, cy = group.coord
-        if x_range[0] is None or cx < x_range[0]: x_range[0] = cx
-        if x_range[1] is None or cx > x_range[1]: x_range[1] = cx
-        if y_range[0] is None or cy < y_range[0]: y_range[0] = cy
-        if y_range[1] is None or cy > y_range[1]: y_range[1] = cy
-
         for device in group.devices:
+            cx, cy = device.x_coord, device.y_coord
+            if x_range[0] is None or cx < x_range[0]: x_range[0] = cx
+            if x_range[1] is None or cx > x_range[1]: x_range[1] = cx
+            if y_range[0] is None or cy < y_range[0]: y_range[0] = cy
+            if y_range[1] is None or cy > y_range[1]: y_range[1] = cy
+
             # We want metrics from Analysis (Summary) if available, or just defaults
             # Actually heatmap usually visualizes "Ps", "RA", "RMS" derived from Hanle
             # Logic: Fetch 'default' Hanle measurement for the device, parse its results.
@@ -635,8 +644,8 @@ def get_heatmap_data(sample_id: str):
             
             devices_data.append({
                 "device_id": device.device_id,
-                "coord": group.coord,
-                "area_um2": device.area_um2,
+                "coord": [device.x_coord, device.y_coord],
+                "area_um2": units.convert_area_m2_to_um2(device.area_m2),
                 "hanle": metrics
             })
 

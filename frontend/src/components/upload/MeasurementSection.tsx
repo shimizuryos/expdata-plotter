@@ -20,6 +20,7 @@ export function MeasurementSection({
     const [fileRef, setFileRef] = useState<string>("");
     const [setAsDefault, setSetAsDefault] = useState<boolean>(false);
     const [hanleDerivedStr, setHanleDerivedStr] = useState<string>('{"ps_percent": null, "ra_ohm_um2": null, "rms": null}');
+    const [hanleType, setHanleType] = useState<string>("raw");
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     if (!deviceId) {
@@ -47,6 +48,7 @@ export function MeasurementSection({
             let derived = null;
             if (measurementType === "Hanle") {
                 derived = JSON.parse(hanleDerivedStr);
+                metadata.hanle_type = hanleType;
             }
 
             await onRegister({
@@ -89,10 +91,20 @@ export function MeasurementSection({
             </div>
 
             {measurementType === "Hanle" && (
-                <div className="mb-4">
-                    <label className="block text-sm font-medium">Hanle Derived (JSON) [ps, ra, rms]</label>
-                    <input className="w-full p-2 border rounded font-mono text-sm" value={hanleDerivedStr} onChange={(e) => setHanleDerivedStr(e.target.value)} />
-                </div>
+                <>
+                    <div className="mb-4">
+                        <label className="block text-sm font-medium">Hanle Type</label>
+                        <select className="w-full p-2 border rounded" value={hanleType} onChange={(e) => setHanleType(e.target.value)}>
+                            <option value="raw">Raw</option>
+                            <option value="broad">Broad</option>
+                            <option value="narrow">Narrow/3T only</option>
+                        </select>
+                    </div>
+                    <div className="mb-4">
+                        <label className="block text-sm font-medium">Hanle Derived (JSON) [ps, ra, rms]</label>
+                        <input className="w-full p-2 border rounded font-mono text-sm" value={hanleDerivedStr} onChange={(e) => setHanleDerivedStr(e.target.value)} />
+                    </div>
+                </>
             )}
 
             <div className="mb-4">
